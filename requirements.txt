@@ -4,3 +4,5 @@ pymongo
 email-validator
 pymongo 
 python-dotenv
+argon2-cffi
+PyJWT

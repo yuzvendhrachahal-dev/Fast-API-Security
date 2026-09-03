@@ -1,12 +1,15 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from app.database import client, user_collection
-from app.schemas import UserCreate, UserResponse, UserUpdate, UserPut
+from app.schemas import UserCreate, UserResponse, UserUpdate, UserPut, RegisterRequest, LoginRequest
+from app.security import hash_password, verify_password, create_access_token, decode_access_token
 from bson import ObjectId
 from typing import List
 
 app = FastAPI()
 
+security = HTTPBearer()
 
 @app.get("/")
 async def home():
@@ -82,34 +85,7 @@ async def get_all_users():
         for user in users
     ]
 
-@app.get(
-    "/users/{user_id}",
-    response_model=UserResponse
-)
-async def get_user(user_id: str):
 
-    if not ObjectId.is_valid(user_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid user ID"
-        )
-
-    user = await user_collection.find_one(
-        {"_id": ObjectId(user_id)}
-    )
-
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-
-    return {
-        "id": str(user["_id"]),
-        "name": user["name"],
-        "email": user["email"],
-        "age": user["age"]
-    }
 
 @app.put(
     "/users/{user_id}",
@@ -222,3 +198,161 @@ async def delete_user(user_id: str):
         )
 
     return None
+
+@app.post(
+    "/auth/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED
+)
+async def register(user: RegisterRequest):
+
+    existing_user = await user_collection.find_one(
+        {"email": user.email}
+    )
+
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already exists"
+        )
+
+    await user_collection.create_index("email", unique=True)
+
+    password_hash = hash_password(
+        user.password
+    )
+
+    user_document = {
+        "name": user.name,
+        "email": user.email,
+        "password_hash": password_hash,
+        "role": "user",
+        "is_email_verified": False,
+        "is_mobile_verified": False
+    }
+
+    result = await user_collection.insert_one(
+        user_document
+    )
+
+    return {
+        "id": str(result.inserted_id),
+        "name": user.name,
+        "email": user.email,
+        "role": "user"
+    }
+
+@app.post("/auth/login")
+async def login(credentials: LoginRequest):
+
+    user = await user_collection.find_one(
+        {"email": credentials.email}
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    if not verify_password(
+        credentials.password,
+        user["password_hash"]
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    access_token = create_access_token(
+        user_id=str(user["_id"]),
+        role=user["role"]
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    token = credentials.credentials
+
+    payload = decode_access_token(token)
+
+    print("JWT PAYLOAD:", payload)
+
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+
+    user_id = payload.get("sub")
+
+    print("USER ID FROM JWT:", user_id)
+
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
+
+    if not ObjectId.is_valid(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID in token"
+        )
+
+    return user_id
+
+@app.get("/users/me")
+async def get_me(
+    user_id: str = Depends(get_current_user)
+):
+    user = await user_collection.find_one(
+        {"_id": ObjectId(user_id)}
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    return {
+        "id": str(user["_id"]),
+        "name": user["name"],
+        "email": user["email"],
+        "role": user["role"]
+    }
+
+@app.get(
+    "/users/{user_id}",
+    response_model=UserResponse
+)
+async def get_user(user_id: str):
+
+    if not ObjectId.is_valid(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user ID"
+        )
+
+    user = await user_collection.find_one(
+        {"_id": ObjectId(user_id)}
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    return {
+        "id": str(user["_id"]),
+        "name": user["name"],
+        "email": user["email"],
+        "age": user["age"]
+    }

@@ -19,8 +19,8 @@ class UserResponse(BaseModel):
     id: str
     name: str
     email: EmailStr
-    age: int
-
+    #age: int
+    role: str
 
 class UserUpdate(BaseModel):
     name: str | None = Field(
@@ -49,3 +49,24 @@ class UserPut(BaseModel):
         ge=1,
         le=120
     )
+
+class RegisterRequest(BaseModel):
+
+    name: str = Field(
+        min_length=2,
+        max_length=50
+    )
+
+    email: EmailStr
+
+    password: str = Field(
+        min_length=8,
+        max_length=128
+    )
+
+
+class LoginRequest(BaseModel):
+
+    email: EmailStr
+
+    password: str
