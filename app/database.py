@@ -71,4 +71,3 @@ async def seed_admin():
                 {"email": "admin@admin.com"},
                 {"$set": updates}
             )
-        print("Admin account verified: admin@admin.com")

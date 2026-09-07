@@ -22,11 +22,7 @@ async def lifespan(app: FastAPI):
 
     await client.admin.command("ping")
 
-    print("Database connected")
-
     await create_indexes()
-
-    print("Indexes created")
 
     await seed_admin()
 
@@ -38,8 +34,6 @@ async def lifespan(app: FastAPI):
     # -----------------------------
 
     await client.close()
-
-    print("Database connection closed")
 
 
 app = FastAPI(
