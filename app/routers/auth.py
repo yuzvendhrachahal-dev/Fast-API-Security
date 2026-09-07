@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pymongo.errors import DuplicateKeyError
 
 from app.database import refresh_token_collection, user_collection
+from app.rate_limiter import limiter
 from app.schemas import (
     LoginRequest,
     RefreshTokenRequest,
@@ -71,7 +72,8 @@ async def register(user: RegisterRequest):
     "/login",
     response_model=TokenResponse
 )
-async def login(credentials: LoginRequest):
+@limiter.limit("5/minute")
+async def login(request: Request, credentials: LoginRequest):
     user = await user_collection.find_one({"email": credentials.email})
 
     if (
