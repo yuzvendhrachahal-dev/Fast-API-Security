@@ -296,7 +296,8 @@ async def verify_otp(request: VerifyOTPRequest):
             {"email": email},
             {
                 "$set": {
-                    "is_email_verified": True
+                    "is_email_verified": True,
+                    "is_verified": True
                 }
             }
         )

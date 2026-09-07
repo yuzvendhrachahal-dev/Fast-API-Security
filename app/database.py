@@ -40,3 +40,35 @@ async def create_indexes():
         "expires_at",
         expireAfterSeconds=0
     )
+
+
+async def seed_admin():
+    from app.security import hash_password
+
+    admin = await user_collection.find_one({"email": "admin@admin.com"})
+    if not admin:
+        admin_doc = {
+            "name": "Admin",
+            "email": "admin@admin.com",
+            "password_hash": hash_password("Admin@123"),
+            "role": "admin",
+            "is_verified": True,
+            "is_email_verified": True,
+            "is_mobile_verified": False,
+        }
+        await user_collection.insert_one(admin_doc)
+        print("Default admin account created: admin@admin.com")
+    else:
+        # Ensure role is admin and verified
+        updates = {}
+        if admin.get("role") != "admin":
+            updates["role"] = "admin"
+        if not admin.get("is_verified") or not admin.get("is_email_verified"):
+            updates["is_verified"] = True
+            updates["is_email_verified"] = True
+        if updates:
+            await user_collection.update_one(
+                {"email": "admin@admin.com"},
+                {"$set": updates}
+            )
+        print("Admin account verified: admin@admin.com")

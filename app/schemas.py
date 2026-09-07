@@ -11,11 +11,14 @@ class UserResponse(BaseModel):
     name: str
     email: EmailStr
     role: str = "user"
+    is_verified: bool = False
 
 
 class UserUpdate(BaseModel):  # PATCH
     name: str | None = Field(default=None, min_length=2, max_length=50)
     email: EmailStr | None = None
+    role: str | None = None
+
 
 
 class UserPut(BaseModel):  # PUT

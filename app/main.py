@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import client, create_indexes
+from app.database import client, create_indexes, seed_admin
 
 from app.routers.auth import router as auth_router
 from app.routers.users import router as users_router
@@ -27,6 +27,9 @@ async def lifespan(app: FastAPI):
     await create_indexes()
 
     print("Indexes created")
+
+    await seed_admin()
+
 
     yield
 

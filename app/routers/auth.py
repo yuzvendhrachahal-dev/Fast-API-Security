@@ -49,6 +49,7 @@ async def register(user: RegisterRequest):
         "password_hash": password_hash,
         "role": "user",
         "is_email_verified": False,
+        "is_verified": False,
         "is_mobile_verified": False
     }
 
@@ -64,7 +65,8 @@ async def register(user: RegisterRequest):
         "id": str(result.inserted_id),
         "name": user.name,
         "email": user.email,
-        "role": "user"
+        "role": "user",
+        "is_verified": False
     }
 
 

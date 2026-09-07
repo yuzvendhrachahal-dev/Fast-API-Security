@@ -3,13 +3,23 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.errors import DuplicateKeyError
 
 from app.database import user_collection
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_admin
 from app.schemas import UserCreate, UserPut, UserResponse, UserUpdate
 
 router = APIRouter(
     prefix="/users",
     tags=["Users"]
 )
+
+
+def user_to_response(user: dict) -> dict:
+    return {
+        "id": str(user["_id"]),
+        "name": user["name"],
+        "email": user["email"],
+        "role": user.get("role", "user"),
+        "is_verified": bool(user.get("is_email_verified", user.get("is_verified", False)))
+    }
 
 
 @router.get(
@@ -19,12 +29,7 @@ router = APIRouter(
 async def get_my_profile(
     current_user: dict = Depends(get_current_user)
 ):
-    return {
-        "id": str(current_user["_id"]),
-        "name": current_user["name"],
-        "email": current_user["email"],
-        "role": current_user.get("role", "user")
-    }
+    return user_to_response(current_user)
 
 
 @router.post(
@@ -32,9 +37,14 @@ async def get_my_profile(
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED
 )
-async def create_user(user: UserCreate):
+async def create_user(
+    user: UserCreate,
+    current_user: dict = Depends(require_admin)
+):
     user_data = user.model_dump()
     user_data["role"] = "user"
+    user_data["is_email_verified"] = False
+    user_data["is_verified"] = False
 
     try:
         result = await user_collection.insert_one(user_data)
@@ -44,44 +54,31 @@ async def create_user(user: UserCreate):
             detail="Email already registered"
         )
 
-    return {
-        "id": str(result.inserted_id),
-        "name": user_data["name"],
-        "email": user_data["email"],
-        "role": user_data["role"]
-    }
+    user_data["_id"] = result.inserted_id
+    return user_to_response(user_data)
 
 
 @router.get(
     "/all",
     response_model=list[UserResponse]
 )
-async def get_all_users():
+async def get_all_users(
+    current_user: dict = Depends(get_current_user)
+):
     users_cursor = user_collection.find()
     users = await users_cursor.to_list(length=None)
 
-    if not users:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No users found"
-        )
-
-    return [
-        {
-            "id": str(user["_id"]),
-            "name": user["name"],
-            "email": user["email"],
-            "role": user.get("role", "user")
-        }
-        for user in users
-    ]
+    return [user_to_response(user) for user in users]
 
 
 @router.get(
     "/{user_id}",
     response_model=UserResponse
 )
-async def get_user(user_id: str):
+async def get_user(
+    user_id: str,
+    current_user: dict = Depends(get_current_user)
+):
     if not ObjectId.is_valid(user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -95,23 +92,29 @@ async def get_user(user_id: str):
             detail="User not found"
         )
 
-    return {
-        "id": str(user["_id"]),
-        "name": user["name"],
-        "email": user["email"],
-        "role": user.get("role", "user")
-    }
+    return user_to_response(user)
 
 
 @router.put(
     "/{user_id}",
     response_model=UserResponse
 )
-async def replace_user(user_id: str, user: UserPut):
+async def replace_user(
+    user_id: str,
+    user: UserPut,
+    current_user: dict = Depends(get_current_user)
+):
     if not ObjectId.is_valid(user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid user ID"
+        )
+
+    # Only admin or the user themselves can update
+    if current_user.get("role") != "admin" and str(current_user["_id"]) != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update your own profile"
         )
 
     existing_user = await user_collection.find_one({"_id": ObjectId(user_id)})
@@ -133,19 +136,18 @@ async def replace_user(user_id: str, user: UserPut):
         )
 
     updated_user = await user_collection.find_one({"_id": ObjectId(user_id)})
-    return {
-        "id": str(updated_user["_id"]),
-        "name": updated_user["name"],
-        "email": updated_user["email"],
-        "role": updated_user.get("role", "user")
-    }
+    return user_to_response(updated_user)
 
 
 @router.patch(
     "/{user_id}",
     response_model=UserResponse
 )
-async def update_user(user_id: str, user: UserUpdate):
+async def update_user(
+    user_id: str,
+    user: UserUpdate,
+    current_user: dict = Depends(get_current_user)
+):
     if not ObjectId.is_valid(user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -157,6 +159,35 @@ async def update_user(user_id: str, user: UserUpdate):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No fields to update"
+        )
+
+    # Role modification validation
+    if "role" in update_data:
+        # Require admin to change roles
+        if current_user.get("role") != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin privileges required to change user roles"
+            )
+
+        if update_data["role"] not in ["admin", "user"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid role. Must be 'admin' or 'user'"
+            )
+
+        # Admin self-protection: Cannot remove own admin role
+        if str(current_user["_id"]) == user_id and update_data["role"] != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Administrators cannot remove their own admin privileges"
+            )
+
+    # Non-admin users cannot update other users
+    if current_user.get("role") != "admin" and str(current_user["_id"]) != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update your own profile"
         )
 
     try:
@@ -177,23 +208,28 @@ async def update_user(user_id: str, user: UserUpdate):
         )
 
     updated_user = await user_collection.find_one({"_id": ObjectId(user_id)})
-    return {
-        "id": str(updated_user["_id"]),
-        "name": updated_user["name"],
-        "email": updated_user["email"],
-        "role": updated_user.get("role", "user")
-    }
+    return user_to_response(updated_user)
 
 
 @router.delete(
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT
 )
-async def delete_user(user_id: str):
+async def delete_user(
+    user_id: str,
+    current_user: dict = Depends(require_admin)
+):
     if not ObjectId.is_valid(user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid user ID"
+        )
+
+    # Admin self-protection: Cannot delete own account
+    if str(current_user["_id"]) == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Administrators cannot delete their own account"
         )
 
     result = await user_collection.delete_one({"_id": ObjectId(user_id)})
